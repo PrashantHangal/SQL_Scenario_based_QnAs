@@ -1,0 +1,356 @@
+# SQL_Scenario_based_QnAs
+
+Q1. Find the Monthly Retention Rate of Users.
+   
+Tables: Users(user_id, signup_date), Logins(user_id, login_date)
+
+Ans:
+
+Monthly Retention Rate measures how many users who signed up in a given month, came back and logged in in the next month.
+
+✅ Step-by-Step Logic
+
+1. Extract signup month for each user.
+
+2. Extract login month for each login.
+
+3. Join the two tables on user_id.
+
+4. Check if login happened in the month after the signup month.
+
+5. Count how many users are retained for each signup month.
+
+6. Divide retained users by total signed-up users in that month.
+
+Query:
+
+with signups as (
+  Select
+    user_id,
+    DATE_TRUNC('month', signup_date) AS signup_month  
+    From users
+),
+logins as (
+  Select
+    user_id,
+    DATE_TRUNC('month', login_date) AS login_month  
+    From Logins
+),
+next_month_login as (
+  select s.user_id,
+         s.signup_month,
+         l.login_month
+  From Signup s
+  Join logins l on s.user_id = l.user_id
+  Where l.login_month = s.signup_month + INTERVAL '1 month'
+),
+  retention_calc as (
+    select 
+      signup_month,
+      Count(Distinct user_id) as retained_users
+  from next_month_logins
+  Group by signup_month
+),
+total_signups as (
+    Select 
+      signup_month,
+      Count(Distinct user_id) as total_users
+    From signups
+    Group by signup_month
+)
+SELECT 
+    t.signup_month,
+    COALESCE(r.retained_users, 0) AS retained_users,
+    t.total_users,
+    ROUND(CAST(COALESCE(r.retained_users, 0) AS DECIMAL) / t.total_users * 100, 2) AS retention_rate_percentage
+FROM total_signups t
+LEFT JOIN retention_calc r ON t.signup_month = r.signup_month
+ORDER BY t.signup_month;
+=========================================================================
+
+Q2. Identify Products Frequently Bought Together
+Table: Order_Items(order_id, product_id)
+
+Ans:
+✅ Assumptions:
+
+i. A single order_id can have multiple product_ids.
+
+ii. We're interested in pairs of products that appear in the same order.
+
+iii. We may want to count how many times each pair occurred.
+
+🧠 Step-by-Step Logic:
+
+a. Self-join the Order_Items table on order_id to find combinations of products within the same order.
+
+b. To avoid duplicate and reversed pairs, use a condition like product_id1 < product_id2.
+
+c. Group by the product pairs and count how many times they appear together.
+
+d. Optionally, filter for pairs that occur together more than a certain number of times.   
+
+Query:
+
+select 
+	oi1.product_id,
+	oi2.product_id,
+	count(*) as times_bought_together
+from Order_items oi1
+Join Order_items oi2
+ON oi1.order_id = oi2.order_id
+AND oi1.product_id < oi2.product_id
+Group by oi1.product_id, oi2.product_id
+order by times_bought_together DESC
+LIMIT 10;
+
+
+=========================================================================
+3. Find the 2nd Highest Salary in Each Department
+Tables: Employees(employee_id, department_id, salary)
+
+Ans:
+
+Select
+	department_id,
+	salary as Second highest salary,
+From
+	(
+	 select 
+		department_id,
+		salary,
+		Dense_Rank() over (Partition by department_id order by Salary DESC) as rank
+	From Employees
+	) ranked_salaries
+where rank = 2; 
+
+=========================================================================
+4. Calculate the Rolling 7-Day Average of Daily Sales
+Table: Sales(date, total_amount)
+
+Ans:
+
+select 
+	date, 
+	total_amount,
+	Round(AVG(total_amount) OVER(
+		Order by date
+		Rows Between 6 Preceding And Current Row
+	     ), 2)  As rolling_7_day_avg
+From sales
+order by date;
+
+=========================================================================
+ 
+5. Detect Duplicate Records in a Table
+Table: Customers(customer_id, email, phone_number)
+
+Ans:
+
+select *,
+From (
+	select *,
+		count(*) over (partition by email, phone_number) AS duplicate_count
+	from Customers
+     ) As duped
+where duplicate_count > 1;
+
+============================================================================
+
+6. Find the Longest Streak of Daily Logins for Each User
+Table: User_Logins(user_id, login_date)
+
+Ans:
+
+WITH ranked_logins AS (
+    SELECT 
+        user_id,
+        login_date,
+        ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY login_date) AS rn
+    FROM User_Logins
+),
+streaks AS (
+    SELECT 
+        user_id,
+        login_date,
+        login_date - INTERVAL '1 day' * rn AS streak_key
+    FROM ranked_logins
+),
+grouped_streaks AS (
+    SELECT 
+        user_id,
+        MIN(login_date) AS streak_start,
+        MAX(login_date) AS streak_end,
+        COUNT(*) AS streak_length
+    FROM streaks
+    GROUP BY user_id, streak_key
+),
+max_streaks AS (
+    SELECT 
+        user_id,
+        MAX(streak_length) AS longest_streak
+    FROM grouped_streaks
+    GROUP BY user_id
+)
+SELECT * FROM max_streaks
+ORDER BY longest_streak DESC;
+
+==============================================================================
+
+7. Identify Products with Zero Sales in the Last 30 Days
+Tables: Products(product_id), Sales(sale_id, product_id, sale_date)
+
+Ans:
+
+✅ Objective:
+Find all product_ids from the Products table that have not been sold in the last 30 days from today.
+
+🧠 Logic Breakdown:
+Start with all product_ids from the Products table.
+
+Exclude any products that have sales in the last 30 days.
+
+Use a LEFT JOIN to identify products with no recent matching sales.
+
+Query:
+
+select p.product_id
+from product p
+Left Join sales s
+ON p.product_id = s.product_id
+AND s.sales_date > Current_date - Interval '30' day
+Where s.product_id IS NULL;
+
+======================================================================================
+
+8. List Customers Who Made Purchases Every Month for the Last 6 Months
+Tables: Orders(order_id, customer_id, order_date)
+
+Ans:
+
+select customer_id
+from (
+	select 
+	    customer_id,
+	    DATE_FORMAT(order_date, '%Y-%m') as year_month
+	from orders
+	where order_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+	GROUP BY Customer_id, year_month
+) AS monthly_orders
+Group by customers_id
+HAVING COUNT(DISTINCT year_month) = 6;
+
+======================================================================================
+
+9. Calculate Conversion Rate from Signup to First Purchase
+Tables: Users(user_id, signup_date), Orders(order_id, user_id, order_date)
+
+Ans:
+✅ Goal:
+
+Calculate the conversion rate:
+
+a.Conversion Rate = (# of users who made at least one purchase) / (Total # of users)
+
+Optionally, we can find:
+
+a. How many users purchased within X days of signup (e.g. first-day or 7-day conversion)
+
+b. The average time to first purchase
+
+Query:
+
+select 
+	ROUND(COUNT(DISTINCT o.user_id) / COUNT(DISTINCT u.user_id), 2) * 100 AS conversion_rate_per_user
+from user u
+left join orders o
+ON u.user_id = o.user_id;
+
+Additional:
+Query 1: 🧩 Find First Purchase Date per User
+
+with first_orders as (
+	select user_id, min(order_date) AS first_purchase_date
+	From Orders
+	Group by user_id
+)
+
+select u.user_id, u.signup_date, f.purchase_date,
+	DATEDIFF(f.purchase_date, u.signup_date) AS days_to_convert
+From users u
+Left Join first_orders f
+ON u.user_id = f.user_id;
+
+Query 2 : ✅ Calculate 7-Day Conversion Rate
+
+with first_orders as (
+	select user_id, min(order_date) AS first_purchase_date
+	From orders
+	Group by user_id
+)
+
+Select 
+	(ROUND(SUM(CASE WHEN DateDiff (first_purchase_date, signup_date) <= 7 THEN 1 Else 0 END) * 100
+		/ COUNT(*), 2) AS Conversion_within_7days
+From users u
+Left join first_orders f
+ON u.user_id = f.user_id;
+
+==============================================================================================
+
+10. Find Orders Where the Total Quantity Exceeds 100 Units
+Table: Order_Details(order_id, product_id, quantity)
+
+Ans:
+select order_id,	
+	sum(quantity) as Total_quantity
+from Order_Details 
+Group by order_id
+Having sum(quantity) > 100;
+
+=============================================================================================
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
