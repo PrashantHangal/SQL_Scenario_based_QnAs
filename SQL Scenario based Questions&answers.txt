@@ -1,0 +1,454 @@
+SQL Scenario based Questions:
+
+1) Find the second highest salary without using LIMIT, OFFSET, or TOP.
+Ans:
+	Select Max(Salary) as Second_Highest_Salary
+	from employees
+	where Salary < (Select Max(Salary) from employees);
+
+2) Identify customers who made transactions in every month of the year.
+Ans: 
+	Select Customer_id
+	From Transaction
+	Where Year (Transaction_date) = 2023
+	Group by Customer_id
+	Having (Distinct Month(Transaction_date)) = 12;
+
+3) Calculate the 7-day moving average of sales for each product.
+Ans:
+	Select product_id, sales_date, sales_amount, 
+		ROUND(Avg(sales_amount) over( partition by product_id order by sales_date ROW BETWEEN 6 PRECEDING AND CURRENT ROW),2) AS moving_7_days_avg
+	From sales
+	group by customer_id, sales_date;
+
+4) Find users who logged in for at least three consecutive days.
+Ans:
+	With login_dates As (
+		select DISTINCT user_id, login_date
+		From User_logins
+	),
+	date_grouped as (
+		Select user_id,
+			login_date,
+			login_date - INTERVAL ROW_NUMBER() OVER (partition by user_id order by login_date)DAY AS streak_group
+		From login_dates
+	),
+	streaks as (
+		Select user_id,
+			COUNT(*) as consecutive_days,
+			Min(login_date) as start_date
+			Max(login_date) as end_date
+		From date_grouped
+		Group by user_id, streak_group
+		Having Count(*) >=3
+	)
+	Select DISTINCT user_id
+	From streaks;
+
+5) Use window functions to rank orders by order value per customer and return the top 3.
+Ans:
+	With ranked_orders as (
+		Select  order_id,
+			customer_id,
+			order_date,
+			order_value,
+			RANK() over (partition by customer_id order by order_value Desc) as order_rank	
+			From orders
+			),
+	Select *
+	From ranked_orders
+	where rank_order <= 3
+	order by customer_id, order_rank;
+
+And: 
+	Q)Find the top 3 orders by value per customer per month using window functions. 
+
+Ans: 
+	WITH ranked_orders AS (
+    SELECT
+        order_id,
+        customer_id,
+        order_date,
+        order_value,
+        EXTRACT(YEAR FROM order_date) AS order_year,
+        EXTRACT(MONTH FROM order_date) AS order_month,
+        RANK() OVER (
+            PARTITION BY customer_id, EXTRACT(YEAR FROM order_date), EXTRACT(MONTH FROM order_date)
+            ORDER BY order_value DESC
+        ) AS order_rank
+    FROM orders
+)
+SELECT *
+FROM ranked_orders
+WHERE order_rank <= 3
+ORDER BY customer_id, order_year, order_month, order_rank;
+
+
+6) Retrieve employees who earn more than their managers.
+Ans:
+	select
+		e.emp_id,
+		e.name,
+		e.salary as employee_salary,
+		m.salary as manager_salary,
+		m.emp_name as manager_name
+	From employees e
+	Join manager m
+	ON e.manger_id = m.emp_id
+	where e.salary > m.salary; 
+
+7) Find duplicate rows in a large table and delete only the extras.
+Ans:
+	i). First Count duplicates.
+	-   
+	    Select name, email, signup_date, count(*) as count
+	    from users
+	    group by name, email, signup_date
+	    Having count(*) > 1;
+
+	ii) Delete using ROW_NUM()
+	-   
+	    with ranked_dups as (
+		select id,
+			ROW_NUMBER() OVER (
+					partition by name, email, signup_date order by id) as rn
+		From users 
+	)
+	Delete from users
+	where id IN ( select id From ranked_dups where rn>1)
+	);
+
+8) Optimize a slow-performing query with multiple joins and aggregations.
+Ans:
+	select 
+		c.customer_id,
+		c.customer_name,
+		sum(o.order_amount) as total_spent
+		count(DISTINCT p.product_id) as unique_products
+	From customers c
+	JOIN orders o ON c.customer_id = o.customer_id
+	JOIN order_items oi ON o.order_id = oi.orderid
+	JOIN products p ON oi.product_id = p.product_id
+	GROUP BY c.customer_id, c.customer_name
+	ORDER BY total_spent DESC;
+
+So, the above Query has to be optimized and query is written below:
+	with order_totals as (
+		select customer_id,
+		sum(amount) as total_spent
+		from orders
+		group by customer_id
+	),
+	with product_count as (
+		select o.customer_id,
+		COUNT(DISTINCT oi.product_id ) AS unique_products
+		from orders o
+		JOIN order_items oi ON o.order_id = oi.order_id
+		Group by o.customer_id
+	)
+	select c.customer_id, c.customer_name, ot.total_spent, pc.unique_products
+	From customers c
+	LEFT JOIN order_totals ot ON c.customer_id = ot.customer_id
+	LEFT JOIN product_counts pc ON c.customer_id = pc.customer_id
+	ORDER BY ot.total_spent DESC;
+
+
+9) Get the first order for each customer, handling tie-breakers properly.
+Ans:
+	with ranked_orders as (
+		select *,
+		ROW_NUMBER() OVER (partition by customer_id order by order_date ASC, order_id ASC) as rn
+	From orders
+	)
+	Select *
+	From ranked_orders
+	Where rn = 1;
+
+10) Find products never purchased by any customer.
+Ans:
+	-- Left Join + ISNULL:
+	select p.product_id, p.product_name
+	from products p
+	LEFT JOIN Order_items oi ON p.product_id = oi.product_id
+	where oi.prodct_id ISNULL;
+
+	-- NOT EXISTS :
+	SELECT p.product_id, p.product_name
+	FROM products p
+	WHERE NOT EXISTS (
+    	SELECT 1
+    	FROM order_items oi
+    	WHERE oi.product_id = p.product_id
+	);
+
+	-- NOT IN:
+	SELECT product_id, product_name
+	FROM products
+	WHERE product_id NOT IN (
+    	SELECT DISTINCT product_id FROM order_items
+	);
+
+11) Retrieve users who made purchases in 2 consecutive months but not the 3rd.
+Ans: 
+	WITH user_months AS (
+    	SELECT DISTINCT
+        user_id,
+        DATE_TRUNC('month', purchase_date) AS purchase_month
+    	FROM purchases
+	),
+	ranked_months AS (
+    	SELECT
+        user_id,
+        purchase_month,
+        LAG(purchase_month, 1) OVER (PARTITION BY user_id ORDER BY purchase_month) AS prev_month,
+        LAG(purchase_month, 2) OVER (PARTITION BY user_id ORDER BY purchase_month) AS prev2_month
+    	FROM user_months
+	),
+	consecutive_check AS (
+    	SELECT *
+    	FROM ranked_months
+    	WHERE
+        -- Check that we have 2 consecutive months
+        DATE_PART('month', purchase_month) - DATE_PART('month', prev_month) = 1
+        AND DATE_PART('month', prev_month) - DATE_PART('month', prev2_month) = 1
+	)
+	
+	SELECT DISTINCT user_id
+	FROM user_months
+	WHERE user_id IN (
+    	SELECT user_id FROM consecutive_check
+	)
+	AND purchase_month NOT IN (
+    	SELECT DATE_TRUNC('month', purchase_month + INTERVAL '1 month')
+    	FROM consecutive_check
+	);
+
+
+12) Find the department with the highest total salary payout.
+Ans:
+	Select department_id, Sum(Salary) as total_salary
+	From employees
+	group by department_id
+	order by total_salary desc
+	limit 1;
+
+13) Identify employees with the same salary in the same department.
+Ans:
+	select e.emp_id, e.name, e.department_id, e.salary
+	from employees e1
+	Join employees e2
+	ON e1.department_id = e2.department_id
+	AND e1.salary = e2.salary
+	AND e1.emp_id<>e2.emp_id;
+
+14) Calculate median salary without using built-in functions.
+Ans:
+	WITH ordered AS (
+    	SELECT 
+        salary,
+        ROW_NUMBER() OVER (ORDER BY salary) AS rn,
+        COUNT(*) OVER () AS total_rows
+    	FROM employees
+	),
+	median_rows AS (
+    	SELECT salary
+    	FROM ordered
+    	WHERE
+        -- For odd: pick middle
+        (total_rows % 2 = 1 AND rn = (total_rows + 1) / 2)
+        -- For even: pick the two middle rows
+     	OR (total_rows % 2 = 0 AND rn IN (total_rows / 2, total_rows / 2 + 1))
+	)
+	SELECT AVG(salary * 1.0) AS median_salary
+	FROM median_rows;
+  
+15) Write a query to pivot rows into monthly sales columns.
+Ans:
+	SELECT
+  product_id,
+  SUM(CASE WHEN sale_month = 'Jan' THEN sales_amount END) AS Jan,
+  SUM(CASE WHEN sale_month = 'Feb' THEN sales_amount END) AS Feb,
+  SUM(CASE WHEN sale_month = 'Mar' THEN sales_amount END) AS Mar,
+  SUM(CASE WHEN sale_month = 'Apr' THEN sales_amount END) AS Apr,
+  SUM(CASE WHEN sale_month = 'May' THEN sales_amount END) AS May,
+  SUM(CASE WHEN sale_month = 'Jun' THEN sales_amount END) AS Jun,
+  SUM(CASE WHEN sale_month = 'Jul' THEN sales_amount END) AS Jul,
+  SUM(CASE WHEN sale_month = 'Aug' THEN sales_amount END) AS Aug,
+  SUM(CASE WHEN sale_month = 'Sep' THEN sales_amount END) AS Sep,
+  SUM(CASE WHEN sale_month = 'Oct' THEN sales_amount END) AS Oct,
+  SUM(CASE WHEN sale_month = 'Nov' THEN sales_amount END) AS Nov,
+  SUM(CASE WHEN sale_month = 'Dec' THEN sales_amount END) AS Dec
+FROM sales
+GROUP BY product_id
+ORDER BY product_id;
+
+--- Using Pivot --
+	SELECT *
+	FROM (
+  	SELECT product_id, sale_month, sales_amount
+  	FROM sales
+	) AS src
+	PIVOT (
+  	SUM(sales_amount)
+  	FOR sale_month IN ([Jan], [Feb], [Mar], [Apr], [May], [Jun],
+                     [Jul], [Aug], [Sep], [Oct], [Nov], [Dec])
+	) AS p;
+
+16) Identify top N customers with the highest total purchases (with tie handling).
+Ans:
+	Declare @N int = 3;
+	
+	With customer_totals as (
+		select customer_id, sum(purchase_amount) as total_purchases
+		from orders
+		group by customer_id
+	),
+	ranked_customers as (
+		select *,
+			Dense_rank() over (order by total_purchases DESC) as rn
+		From customer_totals
+	)
+	select customer_id, total_purchases
+	From ranked_customers
+	where rn <= @N;
+
+17) Get the running total of revenue per day using window functions.
+Ans:
+	SELECT 
+  	sale_date,
+  	revenue,
+  	SUM(revenue) OVER (ORDER BY sale_date) AS running_total
+	FROM sales
+	ORDER BY sale_date;
+
+18) Find users whose most frequently purchased category in the last year is ‘Electronics’.
+Ans:
+	WITH filtered_purchases AS (
+  	SELECT *
+  	FROM purchases
+  	WHERE purchase_date >= CURRENT_DATE - INTERVAL '1 year'
+	),
+	category_count_per_user AS (
+  	SELECT
+   	user_id,
+    	category,
+    	COUNT(*) AS purchase_count
+  	FROM filtered_purchases
+  	GROUP BY user_id, category
+	),
+	ranked_categories AS (
+  	SELECT *,
+         DENSE_RANK() OVER (PARTITION BY user_id ORDER BY purchase_count DESC) AS rnk
+  	FROM category_count_per_user
+	)
+	
+	SELECT user_id
+	FROM ranked_categories
+	WHERE rnk = 1 AND category = 'Electronics';
+
+19) Retrieve the first and last event for each user from an events table.
+Ans:
+	WITH first_last_times AS (
+  	SELECT
+    	user_id,
+    	MIN(event_time) AS first_time,
+    	MAX(event_time) AS last_time
+  	FROM events
+  	GROUP BY user_id
+	),
+	first_last_events AS (
+  	SELECT e.user_id, e.event_type, e.event_time
+  	FROM events e
+  	JOIN first_last_times f
+    	ON e.user_id = f.user_id
+   	AND (e.event_time = f.first_time OR e.event_time = f.last_time)
+	)
+	SELECT *
+	FROM first_last_events
+	ORDER BY user_id, event_time;
+
+20) Rank products by yearly sales, resetting rank every new year.
+Ans:
+	WITH yearly_sales AS (
+  	SELECT
+    	product_id,
+    	EXTRACT(YEAR FROM sale_date) AS sale_year,
+    	SUM(sale_amount) AS total_sales
+  	FROM sales
+  	GROUP BY product_id, EXTRACT(YEAR FROM sale_date)
+	),
+	ranked_products AS (
+  	SELECT *,
+         DENSE_RANK() OVER (PARTITION BY sale_year ORDER BY total_sales DESC) AS sales_rank
+  	FROM yearly_sales
+	)
+	SELECT *
+	FROM ranked_products
+	ORDER BY sale_year, sales_rank;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
